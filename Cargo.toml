@@ -1,0 +1,32 @@
+[package]
+name = "iroh-tutorials"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iroh = { version = "0.95.0", features = ["discovery-pkarr-dht"] }
+iroh-blobs = "0.97"
+iroh-gossip = "0.95.0"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4.5", features = ["derive"] }
+futures = "0.3"
+tokio-util = { version = "0.7", features = ["codec"] }
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+blake3 = "1.5"
+postcard = "1"            # Serialize ticket
+data-encoding = "2"       # Base32 encode ticket
+rand = "0.9"              # Generate random topic
+hex = "0.4"               # Hex encoding
+iroh-mainline-content-discovery = "0.6"  # DHT content discovery
+mainline = { version = "2.0", features = ["async"] }  # Direct DHT access
+iroh-content-discovery = { path = "iroh-content-discovery", features = ["client"] }
+iroh-base = "0.95"  # For SignatureError
+n0-future = "0.1"  # For Stream traits
+serde-big-array = "0.5"  # For SignedAnnounce
+ratatui = "0.29"        # Terminal UI widgets
+crossterm = "0.28"       # Terminal handling
+chrono = "0.4"           # Timestamps

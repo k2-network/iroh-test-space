@@ -1,0 +1,9 @@
+[build]
+xargo = false
+
+[build.env]
+passthrough = ["RUST_BACKTRACE"]
+
+# Fix permission issues in Docker
+[target.x86_64-unknown-linux-gnu]
+# Use host user to avoid permission issues

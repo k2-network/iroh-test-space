@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>K2 Pixel Art Editor - Rust Code Generator</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: linear-gradient(135deg, #0a0a0f 0%, #1a1a2e 100%);
+            min-height: 100vh;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+        h1 {
+            color: #00c8c8;
+            margin-bottom: 10px;
+            text-shadow: 0 0 20px rgba(0, 200, 200, 0.5);
+        }
+        .subtitle { color: #666; margin-bottom: 20px; }
+        
+        .container {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        
+        .editor-panel {
+            background: rgba(255,255,255,0.05);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid rgba(0, 200, 200, 0.3);
+        }
+        
+        .toolbar {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .color-picker-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        #colorPicker {
+            width: 50px;
+            height: 40px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        
+        .preset-colors {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .preset-color {
+            width: 30px;
+            height: 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .preset-color:hover {
+            transform: scale(1.1);
+            border-color: #fff;
+        }
+        
+        .preset-color.eraser {
+            background: repeating-conic-gradient(#666 0% 25%, #999 0% 50%) 50% / 10px 10px;
+        }
+        
+        #canvas-container {
+            display: inline-block;
+            border: 2px solid #00c8c8;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #000;
+        }
+        
+        #pixelCanvas {
+            display: block;
+            cursor: crosshair;
+        }
+        
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #00c8c8, #00a0a0);
+            color: #000;
+        }
+        
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(0, 200, 200, 0.4);
+        }
+        
+        .btn-secondary {
+            background: rgba(255,255,255,0.1);
+            color: #fff;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255,255,255,0.2);
+        }
+        
+        .code-panel {
+            max-width: 600px;
+        }
+        
+        .code-panel h3 {
+            color: #00c8c8;
+            margin-bottom: 10px;
+        }
+        
+        #codeOutput {
+            width: 100%;
+            height: 400px;
+            background: #0d0d0d;
+            border: 1px solid #333;
+            border-radius: 8px;
+            color: #0f0;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 12px;
+            padding: 15px;
+            resize: vertical;
+        }
+        
+        .export-options {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        
+        .export-options label {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            cursor: pointer;
+        }
+        
+        .grid-size {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        
+        .grid-size input {
+            width: 60px;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid #333;
+            background: #1a1a1a;
+            color: #fff;
+            text-align: center;
+        }
+        
+        .info {
+            color: #888;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🐋 K2 Pixel Art Editor</h1>
+    <p class="subtitle">Draw your pixel art, then export to Rust code for Ratatui Canvas</p>
+    
+    <div class="container">
+        <div class="editor-panel">
+            <div class="grid-size">
+                <label>Grid: </label>
+                <input type="number" id="gridWidth" value="32" min="8" max="64">
+                <span>×</span>
+                <input type="number" id="gridHeight" value="24" min="8" max="48">
+                <button class="btn btn-secondary" onclick="resizeGrid()">Resize</button>
+                <button class="btn btn-secondary" onclick="clearCanvas()">Clear</button>
+            </div>
+            
+            <div class="toolbar">
+                <div class="color-picker-wrapper">
+                    <label>Color:</label>
+                    <input type="color" id="colorPicker" value="#00c8c8">
+                </div>
+                
+                <div class="preset-colors">
+                    <div class="preset-color" style="background: #ffffff" onclick="setColor('#ffffff')"></div>
+                    <div class="preset-color" style="background: #00c8c8" onclick="setColor('#00c8c8')"></div>
+                    <div class="preset-color" style="background: #64b4ff" onclick="setColor('#64b4ff')"></div>
+                    <div class="preset-color" style="background: #ffcc00" onclick="setColor('#ffcc00')"></div>
+                    <div class="preset-color" style="background: #ff6666" onclick="setColor('#ff6666')"></div>
+                    <div class="preset-color" style="background: #66ff66" onclick="setColor('#66ff66')"></div>
+                    <div class="preset-color" style="background: #000000" onclick="setColor('#000000')"></div>
+                    <div class="preset-color eraser" onclick="setEraser()" title="Eraser"></div>
+                </div>
+            </div>
+            
+            <div id="canvas-container">
+                <canvas id="pixelCanvas"></canvas>
+            </div>
+            
+            <p class="info">Left-click to draw, Right-click to erase. Hold and drag to paint.</p>
+        </div>
+        
+        <div class="editor-panel code-panel">
+            <h3>Generated Rust Code</h3>
+            
+            <div class="export-options">
+                <label>
+                    <input type="radio" name="exportType" value="canvas" checked onchange="generateCode()">
+                    Canvas Rectangles
+                </label>
+                <label>
+                    <input type="radio" name="exportType" value="ascii" onchange="generateCode()">
+                    ASCII Art (Paragraph)
+                </label>
+            </div>
+            
+            <textarea id="codeOutput" readonly></textarea>
+            
+            <div style="margin-top: 10px; display: flex; gap: 10px;">
+                <button class="btn btn-primary" onclick="copyCode()">📋 Copy Code</button>
+                <button class="btn btn-secondary" onclick="generateCode()">🔄 Refresh</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('pixelCanvas');
+        const ctx = canvas.getContext('2d');
+        const colorPicker = document.getElementById('colorPicker');
+        const codeOutput = document.getElementById('codeOutput');
+        
+        let gridWidth = 32;
+        let gridHeight = 24;
+        let cellSize = 16;
+        let pixels = [];
+        let currentColor = '#00c8c8';
+        let isEraser = false;
+        let isDrawing = false;
+        
+        function initCanvas() {
+            canvas.width = gridWidth * cellSize;
+            canvas.height = gridHeight * cellSize;
+            pixels = Array(gridHeight).fill(null).map(() => Array(gridWidth).fill(null));
+            redraw();
+        }
+        
+        function redraw() {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw grid
+            ctx.strokeStyle = '#222';
+            ctx.lineWidth = 1;
+            for (let x = 0; x <= gridWidth; x++) {
+                ctx.beginPath();
+                ctx.moveTo(x * cellSize, 0);
+                ctx.lineTo(x * cellSize, canvas.height);
+                ctx.stroke();
+            }
+            for (let y = 0; y <= gridHeight; y++) {
+                ctx.beginPath();
+                ctx.moveTo(0, y * cellSize);
+                ctx.lineTo(canvas.width, y * cellSize);
+                ctx.stroke();
+            }
+            
+            // Draw pixels
+            for (let y = 0; y < gridHeight; y++) {
+                for (let x = 0; x < gridWidth; x++) {
+                    if (pixels[y][x]) {
+                        ctx.fillStyle = pixels[y][x];
+                        ctx.fillRect(x * cellSize + 1, y * cellSize + 1, cellSize - 2, cellSize - 2);
+                    }
+                }
+            }
+        }
+        
+        function getGridPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.floor((e.clientX - rect.left) / cellSize);
+            const y = Math.floor((e.clientY - rect.top) / cellSize);
+            return { x: Math.max(0, Math.min(x, gridWidth - 1)), y: Math.max(0, Math.min(y, gridHeight - 1)) };
+        }
+        
+        function paint(e, erase = false) {
+            const pos = getGridPos(e);
+            if (erase || isEraser) {
+                pixels[pos.y][pos.x] = null;
+            } else {
+                pixels[pos.y][pos.x] = currentColor;
+            }
+            redraw();
+            generateCode();
+        }
+        
+        canvas.addEventListener('mousedown', (e) => {
+            isDrawing = true;
+            paint(e, e.button === 2);
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            if (isDrawing) paint(e, e.button === 2);
+        });
+        
+        canvas.addEventListener('mouseup', () => isDrawing = false);
+        canvas.addEventListener('mouseleave', () => isDrawing = false);
+        canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+        
+        colorPicker.addEventListener('input', (e) => {
+            currentColor = e.target.value;
+            isEraser = false;
+        });
+        
+        function setColor(color) {
+            currentColor = color;
+            colorPicker.value = color;
+            isEraser = false;
+        }
+        
+        function setEraser() {
+            isEraser = true;
+        }
+        
+        function resizeGrid() {
+            gridWidth = parseInt(document.getElementById('gridWidth').value) || 32;
+            gridHeight = parseInt(document.getElementById('gridHeight').value) || 24;
+            initCanvas();
+            generateCode();
+        }
+        
+        function clearCanvas() {
+            pixels = Array(gridHeight).fill(null).map(() => Array(gridWidth).fill(null));
+            redraw();
+            generateCode();
+        }
+        
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : null;
+        }
+        
+        function generateCode() {
+            const exportType = document.querySelector('input[name="exportType"]:checked').value;
+            
+            if (exportType === 'canvas') {
+                generateCanvasCode();
+            } else {
+                generateAsciiCode();
+            }
+        }
+        
+        function generateCanvasCode() {
+            let code = `fn draw_pixel_art(ctx: &mut Context) {\n`;
+            
+            // Group pixels by color for optimization
+            const colorGroups = {};
+            for (let y = 0; y < gridHeight; y++) {
+                for (let x = 0; x < gridWidth; x++) {
+                    if (pixels[y][x]) {
+                        if (!colorGroups[pixels[y][x]]) {
+                            colorGroups[pixels[y][x]] = [];
+                        }
+                        // Flip Y axis for Canvas (bottom-left origin)
+                        colorGroups[pixels[y][x]].push({ x, y: gridHeight - 1 - y });
+                    }
+                }
+            }
+            
+            for (const [color, positions] of Object.entries(colorGroups)) {
+                const rgb = hexToRgb(color);
+                const colorStr = color === '#ffffff' ? 'Color::White' : 
+                                 color === '#000000' ? 'Color::Black' :
+                                 `Color::Rgb(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+                
+                code += `    // ${color}\n`;
+                for (const pos of positions) {
+                    code += `    ctx.draw(&Rectangle { x: ${pos.x}.0, y: ${pos.y}.0, width: 1.0, height: 1.0, color: ${colorStr} });\n`;
+                }
+            }
+            
+            code += `}\n`;
+            code += `\n// Usage in render:\n`;
+            code += `let whale_canvas = Canvas::default()\n`;
+            code += `    .x_bounds([0.0, ${gridWidth}.0])\n`;
+            code += `    .y_bounds([0.0, ${gridHeight}.0])\n`;
+            code += `    .paint(|ctx| draw_pixel_art(ctx));\n`;
+            code += `f.render_widget(whale_canvas, area);`;
+            
+            codeOutput.value = code;
+        }
+        
+        function generateAsciiCode() {
+            let ascii = '';
+            for (let y = 0; y < gridHeight; y++) {
+                let row = '';
+                for (let x = 0; x < gridWidth; x++) {
+                    if (pixels[y][x]) {
+                        row += '█';
+                    } else {
+                        row += ' ';
+                    }
+                }
+                ascii += row.trimEnd() + '\n';
+            }
+            
+            // Trim empty lines
+            ascii = ascii.split('\n').filter((line, i, arr) => {
+                const hasContent = line.trim().length > 0;
+                const hasPrevContent = arr.slice(0, i).some(l => l.trim().length > 0);
+                const hasNextContent = arr.slice(i + 1).some(l => l.trim().length > 0);
+                return hasContent || (hasPrevContent && hasNextContent);
+            }).join('\n');
+            
+            let code = `const PIXEL_ART: &str = r#"\n${ascii}\n"#;\n`;
+            code += `\n// Usage:\n`;
+            code += `f.render_widget(Paragraph::new(PIXEL_ART).style(Style::default().fg(Color::White)), area);`;
+            
+            codeOutput.value = code;
+        }
+        
+        function copyCode() {
+            codeOutput.select();
+            document.execCommand('copy');
+            alert('Code copied to clipboard!');
+        }
+        
+        // Initialize
+        initCanvas();
+        generateCode();
+    </script>
+</body>
+</html>
