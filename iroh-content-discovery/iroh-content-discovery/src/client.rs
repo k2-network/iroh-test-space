@@ -1,7 +1,9 @@
-use std::{future::Future, result};
+use std::result;
 
 use iroh::{
-    endpoint::{ConnectOptions, Connection},
+    endpoint::{
+        ConnectOptions, Connection, ConnectionState, OutgoingZeroRtt, RecvStream, ZeroRttStatus,
+    },
     Endpoint, EndpointId,
 };
 use n0_future::{BufferedStreamExt, Stream, StreamExt};
@@ -61,12 +63,6 @@ pub enum Error {
         source: postcard::Error,
         backtrace: snafu::Backtrace,
     },
-
-    #[snafu(display("Failed to complete handshake: {}", source))]
-    Handshake {
-        source: iroh::endpoint::AuthenticationError,
-        backtrace: snafu::Backtrace,
-    },
 }
 
 pub type Result<T> = result::Result<T, Error>;
@@ -106,70 +102,78 @@ pub async fn announce(
         .connect_with_opts(endpoint_id, ALPN, ConnectOptions::default())
         .await
         .context(ConnectSnafu)?;
-    
-    // iroh 0.95: into_0rtt returns Result<OutgoingZeroRttConnection, Connecting>
-    // OutgoingZeroRttConnection has open_bi() directly and can be awaited for full handshake
     match connecting.into_0rtt() {
-        Ok(zero_rtt_conn) => {
+        Ok(connection) => {
             trace!("connected to tracker using possibly 0-rtt: {endpoint_id}");
-            // Use open_bi directly on zero_rtt_conn
-            let (mut send, recv) = zero_rtt_conn.open_bi().await.context(OpenStreamSnafu)?;
-            let request = Request::Announce(signed_announce);
-            let request_bytes = postcard::to_stdvec(&request).context(SerializeRequestSnafu)?;
-            trace!("sending announce");
-            send.write_all(&request_bytes).await.context(WriteRequestSnafu)?;
-            send.finish().context(FinishWriteSnafu)?;
-            let mut recv = recv;
-            let _response = recv
-                .read_to_end(REQUEST_SIZE_LIMIT)
-                .await
-                .context(ReadResponseSnafu)?;
-            trace!("got response");
-            // Wait for handshake to complete
-            let _status = zero_rtt_conn.handshake_completed().await.context(HandshakeSnafu)?;
+            let connection = announce_conn_0rtt(connection, signed_announce).await?;
+            wait_for_session_ticket(connection);
             Ok(())
         }
         Err(connecting) => {
             let connection = connecting.await.context(Connect1RttSnafu)?;
             trace!("connected to tracker using 1-rtt: {endpoint_id}");
-            announce_conn(&connection, signed_announce, async { true }).await?;
+            announce_conn(&connection, signed_announce).await?;
             connection.close(0u32.into(), b"");
             Ok(())
         }
     }
 }
 
-/// Announce via an existing connection.
-///
-/// The proceed future can be used to reattempt the send, which can be useful if the connection
-/// was established using 0-rtt and the tracker does not support it. If you have an existing
-/// 1-rtt connection, you can pass `async { true }` to proceed immediately.
-pub async fn announce_conn(
-    connection: &Connection,
-    signed_announce: SignedAnnounce,
-    proceed: impl Future<Output = bool>,
-) -> Result<()> {
-    let (mut send, recv) = connection.open_bi().await.context(OpenStreamSnafu)?;
+pub fn create_announce_request(signed_announce: SignedAnnounce) -> Result<Vec<u8>> {
     let request = Request::Announce(signed_announce);
-    let request = postcard::to_stdvec(&request).context(SerializeRequestSnafu)?;
+    postcard::to_stdvec(&request).context(SerializeRequestSnafu)
+}
+
+pub async fn send_announce<S: ConnectionState>(
+    connection: &Connection<S>,
+    request: &[u8],
+) -> Result<RecvStream> {
+    let (mut send, recv) = connection.open_bi().await.context(OpenStreamSnafu)?;
     trace!("sending announce");
-    send.write_all(&request).await.context(WriteRequestSnafu)?;
+    send.write_all(request).await.context(WriteRequestSnafu)?;
     send.finish().context(FinishWriteSnafu)?;
-    let mut recv = if proceed.await {
-        recv
-    } else {
-        let (mut send, recv) = connection.open_bi().await.context(OpenStreamSnafu)?;
-        trace!("re-sending announce using 1-rtt");
-        send.write_all(&request).await.context(WriteRequestSnafu)?;
-        send.finish().context(FinishWriteSnafu)?;
-        recv
-    };
+    Ok(recv)
+}
+
+pub async fn recv_response(mut recv: RecvStream) -> Result<()> {
     let _response = recv
         .read_to_end(REQUEST_SIZE_LIMIT)
         .await
         .context(ReadResponseSnafu)?;
     trace!("got response");
     Ok(())
+}
+
+pub async fn announce_conn(connection: &Connection, signed_announce: SignedAnnounce) -> Result<()> {
+    let request = create_announce_request(signed_announce)?;
+    let recv = send_announce(connection, &request).await?;
+    recv_response(recv).await
+}
+
+/// Announce via an existing 0rtt connection.
+pub async fn announce_conn_0rtt(
+    connection: Connection<OutgoingZeroRtt>,
+    signed_announce: SignedAnnounce,
+) -> Result<Connection> {
+    // Send via 0-RTT
+    let request = create_announce_request(signed_announce)?;
+    let recv = send_announce(&connection, &request).await?;
+
+    // Check if 0-RTT was accepted
+    let status = connection
+        .handshake_completed()
+        .await
+        .context(Connect1RttSnafu)?;
+    let (connection, recv) = match status {
+        ZeroRttStatus::Accepted(conn) => (conn, recv),
+        ZeroRttStatus::Rejected(conn) => {
+            // Resend on a new stream
+            let recv = send_announce(&conn, &request).await?;
+            (conn, recv)
+        }
+    };
+    recv_response(recv).await?;
+    Ok(connection)
 }
 
 /// A single query to a tracker, using 0-rtt if possible.
@@ -182,34 +186,48 @@ pub async fn query(
         .connect_with_opts(endpoint_id, ALPN, ConnectOptions::default())
         .await
         .context(ConnectSnafu)?;
-    
-    // iroh 0.95: into_0rtt returns Result<OutgoingZeroRttConnection, Connecting>
     let result = match connecting.into_0rtt() {
-        Ok(zero_rtt_conn) => {
+        Ok(connection) => {
             trace!("connected to tracker using possibly 0-rtt: {endpoint_id}");
-            // Use open_bi directly on zero_rtt_conn
+            // Send via 0-RTT
             let request = Request::Query(args);
-            let request_bytes = postcard::to_stdvec(&request).context(SerializeRequestSnafu)?;
-            let (mut send, recv) = zero_rtt_conn.open_bi().await.context(OpenStreamSnafu)?;
+            let request = postcard::to_stdvec(&request).context(SerializeRequestSnafu)?;
+            trace!("connected to {:?}", connection.remote_id());
+            let (mut send, recv) = connection.open_bi().await.context(OpenStreamSnafu)?;
             trace!("sending query");
-            send.write_all(&request_bytes).await.context(WriteRequestSnafu)?;
+            send.write_all(&request).await.context(WriteRequestSnafu)?;
             send.finish().context(FinishWriteSnafu)?;
-            let mut recv = recv;
+
+            // Check if 0-RTT was accepted
+            let status = connection
+                .handshake_completed()
+                .await
+                .context(Connect1RttSnafu)?;
+            let (connection, mut recv) = match status {
+                ZeroRttStatus::Accepted(conn) => (conn, recv),
+                ZeroRttStatus::Rejected(conn) => {
+                    // Resend on a new stream
+                    let (mut send, recv) = conn.open_bi().await.context(OpenStreamSnafu)?;
+                    trace!("sending query again using 1-rtt");
+                    send.write_all(&request).await.context(WriteRequestSnafu)?;
+                    send.finish().context(FinishWriteSnafu)?;
+                    (conn, recv)
+                }
+            };
             let response = recv
                 .read_to_end(REQUEST_SIZE_LIMIT)
                 .await
                 .context(ReadResponseSnafu)?;
-            let response = postcard::from_bytes::<Response>(&response).context(DeserializeResponseSnafu)?;
-            // Wait for handshake to complete
-            let _status = zero_rtt_conn.handshake_completed().await.context(HandshakeSnafu)?;
-            match response {
-                Response::QueryResponse(r) => r,
-            }
+            let response =
+                postcard::from_bytes::<Response>(&response).context(DeserializeResponseSnafu)?;
+            let Response::QueryResponse(res) = response;
+            wait_for_session_ticket(connection);
+            res
         }
         Err(connecting) => {
             let connection = connecting.await.context(Connect1RttSnafu)?;
             trace!("connected to tracker using 1-rtt: {endpoint_id}");
-            let res = query_conn(&connection, args, async { true }).await?;
+            let res = query_conn(&connection, args).await?;
             connection.close(0u32.into(), b"");
             res
         }
@@ -243,36 +261,16 @@ pub fn query_all(
 }
 
 /// Query via an existing connection.
-///
-/// The proceed future can be used to reattempt the send, which can be useful if the connection
-/// was established using 0-rtt and the tracker does not support it. If you have an existing
-/// 1-rtt connection, you can pass `async { true }` to proceed immediately.
-pub async fn query_conn(
-    connection: &Connection,
+pub async fn query_conn<S: ConnectionState>(
+    connection: &Connection<S>,
     args: Query,
-    proceed: impl Future<Output = bool>,
 ) -> Result<QueryResponse> {
     let request = Request::Query(args);
     let request = postcard::to_stdvec(&request).context(SerializeRequestSnafu)?;
-    // iroh 0.95: remote_id() returns PublicKey directly, not Result
-    trace!(
-        "connected to {:?}",
-        connection.remote_id()
-    );
-    trace!("opened bi stream");
-    let (mut send, recv) = connection.open_bi().await.context(OpenStreamSnafu)?;
     trace!("sending query");
+    let (mut send, mut recv) = connection.open_bi().await.context(OpenStreamSnafu)?;
     send.write_all(&request).await.context(WriteRequestSnafu)?;
     send.finish().context(FinishWriteSnafu)?;
-    let mut recv = if proceed.await {
-        recv
-    } else {
-        let (mut send, recv) = connection.open_bi().await.context(OpenStreamSnafu)?;
-        trace!("sending query again using 1-rtt");
-        send.write_all(&request).await.context(WriteRequestSnafu)?;
-        send.finish().context(FinishWriteSnafu)?;
-        recv
-    };
     let response = recv
         .read_to_end(REQUEST_SIZE_LIMIT)
         .await
@@ -281,4 +279,19 @@ pub async fn query_conn(
     Ok(match response {
         Response::QueryResponse(response) => response,
     })
+}
+
+fn wait_for_session_ticket(connection: Connection<iroh::endpoint::HandshakeCompleted>) {
+    tokio::spawn(async move {
+        // todo: use a more precise API for waiting once it is available.
+        // See https://github.com/quinn-rs/quinn/pull/2257
+        let wait_time = connection
+            .paths()
+            .iter()
+            .find(|p| p.is_selected())
+            .map(|p| p.rtt() * 2)
+            .unwrap_or(std::time::Duration::from_millis(100));
+        tokio::time::sleep(wait_time).await;
+        connection.close(0u32.into(), b"");
+    });
 }
