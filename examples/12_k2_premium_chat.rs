@@ -15,8 +15,8 @@ use crossterm::{
 };
 use futures::StreamExt;
 use iroh::{
-    discovery::pkarr::dht::DhtDiscovery,
     protocol::Router,
+    endpoint::presets,
     Endpoint, EndpointId, SecretKey,
 };
 use iroh_blobs::HashAndFormat;
@@ -365,12 +365,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, cli: Cli
         ui_tx2.send(UiEvent::Progress(10, "GENERATING KEYS...".into())).ok();
         tokio::time::sleep(Duration::from_millis(300)).await;
 
-        let secret_key = SecretKey::generate(&mut rand::rng());
+        let secret_key = SecretKey::generate();
         let my_id = secret_key.public();
 
         ui_tx2.send(UiEvent::Progress(30, "CONNECTING TO RELAY...".into())).ok();
-        let discovery = DhtDiscovery::builder().n0_dns_pkarr_relay().dht(true).include_direct_addresses(true).secret_key(secret_key.clone()).build().unwrap();
-        let endpoint = Endpoint::builder().secret_key(secret_key.clone()).discovery(discovery).alpns(vec![GOSSIP_ALPN.to_vec(), ALPN.to_vec()]).bind().await.unwrap();
+        let endpoint = Endpoint::builder(presets::N0).secret_key(secret_key.clone()).alpns(vec![GOSSIP_ALPN.to_vec(), ALPN.to_vec()]).bind().await.unwrap();
 
         ui_tx2.send(UiEvent::Progress(50, format!("NODE: {}...", &my_id.to_string()[..8]))).ok();
         tokio::time::sleep(Duration::from_millis(300)).await;
